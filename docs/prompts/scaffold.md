@@ -3,74 +3,113 @@
 用途：粘贴给 AI 编程助手（Claude Code、Cursor 等），生成 SpeakLoop 的初始项目骨架。需求依据见 [docs/PRD.md](../PRD.md)。
 
 ```text
-请帮我创建一个 macOS 桌面端 AI 英语口语陪练应用「SpeakLoop」的项目骨架，具体要求如下：
+请帮我创建一个 AI 英语口语陪练网页应用「SpeakLoop」的前后端分离项目骨架，具体要求如下：
 
 【技术栈】
-- Node.js 22 LTS，pnpm 构建
-- Electron（当前稳定版）+ electron-vite
-- 界面：Vue 3（组合式 API + <script setup>）+ Vue Router + Pinia + TypeScript 5（strict 模式）
-- 本地数据库：SQLite（better-sqlite3），手写 SQL + 版本化迁移脚本
-- 参数校验：zod
-- 测试：Vitest + @vue/test-utils
-- 打包：electron-builder，产出 macOS 的 dmg 和 zip（arm64 + x64），预留签名与公证配置
-- API Key 存储：Electron safeStorage（macOS 下由钥匙串保护），不写入数据库和配置文件
+后端（backend/）：
+- JDK 21, Spring Boot 3（当前稳定 3.x 版本）
+- Spring Web + Spring WebSocket + Spring Validation
+- Spring Security + JWT（jjwt）认证
+- MyBatis-Plus 作为 ORM 框架
+- MySQL 8.0 作为主数据库，Flyway 管理表结构迁移
+- Caffeine 作为进程内缓存（本期不使用 Redis）
+- Spring WebClient 用于调用外部 AI 服务（支持 SSE 流式）
+- Lombok
+- Maven 构建
+前端（frontend/）：
+- Vue 3（组合式 API + <script setup>）+ TypeScript + Vite
+- Vue Router + Pinia
+- Element Plus 组件库，ECharts 图表
+- Axios 封装请求
+- pnpm 构建
+部署：
+- Docker Compose 编排 app（Spring Boot）、nginx（托管前端静态资源并反向代理 /api 和 /ws）、mysql 三个服务
 
-【目录结构】
-主进程采用类似 Spring Boot 的经典分层架构，界面采用 Vue 标准结构：
-- src/main/ipc：接口层，按领域拆分（profile、scenario、practice、review、learning、song、settings），相当于 controller
-- src/main/services：业务逻辑层（练习编排、复盘、间隔复习、歌曲等），相当于 service
-- src/main/repositories：数据访问层，学习数据的唯一写入入口，相当于 mapper
-- src/main/db：数据库连接、迁移脚本（migrations/001_init.sql 起）
-- src/main/providers：外部 AI 服务适配层（LLM、ASR、TTS、发音评测、实时语音），每类一个接口 + 实现
-- src/main/common：通用组件（统一返回体、错误码、异常、IPC 包装器、日志）
-- src/preload：预加载脚本，只暴露白名单 API（window.speakloop）
-- src/renderer/views：页面（首页、场景中心、场景详情、练习中、复盘、歌曲、学习中心、设置）
-- src/renderer/components：通用组件
-- src/renderer/stores：Pinia 状态（profile、practice、learning、settings）
-- src/renderer/router：路由配置
-- src/renderer/api：对 window.speakloop 的类型化封装，页面只通过这里调用主进程
-- src/subtitle：悬浮字幕窗（独立 HTML 入口，Vue 应用）
-- src/shared：跨进程共享的类型、IPC 通道常量、zod schema，不得依赖 Electron 或 Node API
-- resources：内置场景与雅思题库 JSON、ECDICT 词典、应用图标
+【后端目录结构】
+采用经典分层架构，包名 com.speakloop：
+- controller：接口层（auth、me、scenario、practice、review、learning、song、admin）
+- websocket：实时练习 WebSocket 处理器、握手拦截器、消息定义
+- service：业务逻辑层（含 interface 和 impl）
+- mapper：数据访问层
+- entity：数据库实体
+- dto：数据传输对象（request / response 分包）
+- provider：外部 AI 服务适配层（LlmProvider、AsrProvider、TtsProvider、PronunciationProvider 接口及实现）
+- security：JWT 过滤器、认证入口、当前用户工具类
+- config：配置类（Security、WebSocket、MyBatis-Plus、Jackson、WebClient、Caffeine）
+- common：通用组件（统一响应体、错误码、异常处理等）
+- utils：工具类（加解密、雪花 ID 转字符串等）
+- resources/db/migration：Flyway 脚本
+
+【前端目录结构】
+- src/api：按模块封装的接口请求
+- src/views：页面（login、register、setup、home、scenarios、practice、review、songs、learn、settings、admin）
+- src/components：通用组件
+- src/stores：Pinia 状态（user、practice、settings）
+- src/router：路由配置与登录、管理员权限守卫
+- src/utils：request.ts（Axios 实例、令牌注入、401 自动刷新、统一错误提示）
+- src/layouts：用户端布局（左侧导航）、管理后台布局
 
 【通用组件】
-1. 统一返回体 Result<T>：成功为 { ok: true, data }，失败为 { ok: false, error: { code, message, retryable, detail? } }，message 使用可直接展示的中文
-2. 错误码枚举 ErrorCode：VALIDATION_FAILED、NOT_FOUND、CONFLICT、PROVIDER_UNAUTHORIZED、PROVIDER_TIMEOUT、PROVIDER_RATE_LIMITED、PROVIDER_UNAVAILABLE、MIC_PERMISSION_DENIED、AUDIO_DEVICE_UNAVAILABLE、SESSION_NOT_ACTIVE、SESSION_ALREADY_ACTIVE、INTERNAL
-3. 自定义业务异常类 AppError（携带 ErrorCode），以及统一的 IPC 处理包装器（相当于全局异常处理器）：用 zod 校验入参，捕获 AppError、校验异常和未知异常并转换为 Result
-4. 事件推送封装：主进程 emit(event, payload)，预加载层 on(event, handler) 返回取消订阅函数；界面侧提供 useIpcEvent 组合式函数，组件卸载时自动取消订阅
-5. Provider 接口定义：LlmProvider（支持 SSE 流式和 AbortSignal）、AsrProvider、TtsProvider、PronunciationProvider、RealtimeVoiceProvider，先提供一个 OpenAI 兼容的 LlmProvider 实现，其余用占位实现
-6. 本地诊断日志：按天滚动、保留 7 天，写日志前自动脱敏 API Key
-7. 安全配置：contextIsolation 开启、nodeIntegration 关闭、外链只允许白名单域名打开
-8. Info.plist 中声明麦克风权限用途说明（NSMicrophoneUsageDescription）
-9. 界面基础布局：左侧边栏导航 + 右侧路由视图，支持系统深色模式
+1. 统一响应体 Result<T>，包含 code、message、data 三个字段；分页响应 PageResult<T> 包含 records、total、page、size
+2. 错误码枚举 ErrorCode：0 成功、40001 参数校验失败、40101 未登录或令牌过期、40102 账号或密码错误、40103 账号已锁定或禁用、40301 无权限、40401 资源不存在、40901 状态冲突、42901 平台额度已用完、42902 请求过于频繁、50001 系统异常、50201 AI 服务未配置、50202 AI 服务认证失败、50203 AI 服务超时或不可用；message 使用可直接展示的中文
+3. 全局异常处理器，覆盖参数校验异常、业务异常、认证与权限异常、系统异常
+4. 自定义业务异常类 BusinessException（携带 ErrorCode）
+5. JWT 认证：访问令牌 2 小时，刷新令牌 7 天放 HttpOnly Cookie；登录连续失败 5 次锁定 15 分钟
+6. 数据隔离：提供 CurrentUser 工具类获取当前用户 ID，所有业务 Service 查询必须带 user_id 条件
+7. AI Key 加解密工具：AES-256-GCM，主密钥从环境变量 SPEAKLOOP_MASTER_KEY 读取
+8. 雪花 ID 主键（MyBatis-Plus ASSIGN_ID），Jackson 全局把 Long 序列化为字符串
+9. 跨域配置（仅 dev 配置文件启用，允许 http://localhost:5173）
+10. MyBatis-Plus 自动填充 create_time、update_time，分页插件
 
 【数据库】
-请生成 SQLite 建表迁移脚本（001_init.sql），包含以下表：
-1. 用户档案表(user_profile)：id, estimated_level, goals, daily_goal_minutes, accent, interests, ielts_target, work_profile, created_at, updated_at
-2. 场景表(scenarios)：id, category, subcategory, title, title_zh, level, estimated_minutes, evaluator_id, built_in, version, payload
-3. 雅思题目表(ielts_questions)：id, part, topic, prompt, cue_card_points, follow_ups, season
-4. 练习会话表(sessions)：id, scenario_id, category, mode, level, correction_strength, focus, status, started_at, ended_at, duration_seconds, user_speaking_seconds, archive_path
-5. 对话回合表(turns)：id, session_id, turn_index, speaker, text, status, interrupted, exam_part, question_id, started_at, ended_at
-6. 复盘表(reviews)：id, session_id, status, summary, next_practice_suggestion, estimated_cefr, metrics, scenario_assessment, model, error_message, created_at
-7. 纠错表(review_issues)：id, review_id, turn_id, original, improved, reason, category
-8. 薄弱点表(weak_points)：id, normalized_key, title, category, status, occurrence_count, first_seen_at, last_seen_at, consecutive_absent_sessions
-9. 薄弱点出现记录表(weak_point_occurrences)：weak_point_id, session_id, evidence
-10. 词汇表(vocabulary)：id, normalized_term, term, phonetic, meaning, contextual_meaning, example, source, familiarity, occurrence_count, first_saved_at, last_saved_at
-11. 收藏句子表(sentences)：id, session_id, turn_id, song_line_id, speaker, text, analysis, saved_at
-12. 复习计划表(review_schedules)：item_type, item_id, interval_days, ease_factor, repetitions, next_review_at, last_reviewed_at, last_rating
-13. 歌曲表(songs)：id, title, artist, audio_path, duration_seconds, lyrics_source, imported_at, last_practiced_at
-14. 歌词行表(lyric_lines)：id, song_id, line_index, text, start_ms, end_ms, explanation
-15. 跟唱记录表(shadowing_attempts)：id, lyric_line_id, recording_path, score, word_scores, created_at
-16. 每日统计表(daily_stats)：date, practice_minutes, session_count, by_category, reviewed_items, goal_met
+请生成 Flyway 迁移脚本 V1__init.sql（MySQL 8.0，utf8mb4），包含以下表：
+1. 用户表(t_user)：id, username, password_hash, role, status, failed_login_count, locked_until, last_login_time, create_time, update_time
+2. 邀请码表(t_invite_code)：id, code, max_uses, used_count, expire_time, created_by, status, create_time
+3. 用户档案表(t_user_profile)：user_id, estimated_level, goals, daily_goal_minutes, accent, interests, ielts_target, work_profile, preferences, prefer_own_key, onboarding_done, create_time, update_time
+4. AI 凭证表(t_api_credential)：id, scope, user_id, provider_type, vendor, base_url, model, api_key_cipher, api_key_hint, extra_config, unit_price, enabled, last_check_time, last_check_ok, create_time, update_time
+5. 额度策略表(t_quota_policy)：id, user_id, daily_voice_minutes, monthly_llm_tokens, monthly_tts_chars, monthly_pronunciation_calls, create_time, update_time
+6. 用量记录表(t_usage_record)：id, user_id, session_id, provider_type, key_scope, usage_type, amount, estimated_cost, create_time
+7. 场景表(t_scenario)：id, owner_id, category, subcategory, title, title_zh, description, level, estimated_minutes, ai_role, objectives, warmup_expressions, exam_structure, evaluator, hints_enabled, sort_order, status, create_time, update_time
+8. 雅思题目表(t_ielts_question)：id, part, topic, prompt, cue_card_points, follow_ups, related_part2_id, season, status, create_time, update_time
+9. 练习会话表(t_practice_session)：id, user_id, scenario_id, category, mode, level, correction_strength, focus, carried_weak_point_ids, exam_question_ids, key_scope, status, review_status, objective_progress, song_id, started_at, ended_at, last_active_at, duration_seconds, user_speaking_seconds, create_time, update_time
+10. 对话回合表(t_turn)：id, session_id, user_id, turn_index, speaker, text, interrupted, exam_part, question_id, started_at, ended_at, create_time
+11. 复盘表(t_review)：id, session_id, user_id, summary, next_practice_suggestion, estimated_cefr, general_scores, metrics, weak_points, recommended_vocabulary, scenario_assessment, model, error_message, create_time, update_time
+12. 纠错表(t_review_issue)：id, review_id, user_id, turn_id, original, improved, reason, category
+13. 薄弱点表(t_weak_point)：id, user_id, normalized_key, title, category, status, occurrence_count, consecutive_absent_sessions, first_seen_at, last_seen_at
+14. 薄弱点出现记录表(t_weak_point_occurrence)：weak_point_id, session_id, evidence
+15. 词汇表(t_vocabulary)：id, user_id, normalized_term, term, phonetic, meaning, contextual_meaning, example, source, familiarity, occurrence_count, first_saved_at, last_saved_at
+16. 收藏句子表(t_sentence)：id, user_id, session_id, turn_id, lyric_line_id, speaker, text, analysis, saved_at
+17. 复习计划表(t_srs_schedule)：id, user_id, item_type, item_id, interval_days, ease_factor, repetitions, next_review_at, last_reviewed_at, last_rating
+18. 歌曲表(t_song)：id, user_id, title, artist, audio_path, duration_seconds, lyrics_source, last_practiced_at, create_time
+19. 歌词行表(t_lyric_line)：id, song_id, line_index, text, start_ms, end_ms, explanation
+20. 跟唱记录表(t_shadowing_attempt)：id, user_id, lyric_line_id, recording_path, score, word_scores, create_time
+21. 每日统计表(t_daily_stat)：user_id, stat_date, practice_minutes, session_count, by_category, reviewed_items, goal_met
+22. 词典表(t_dict_entry)：word, phonetic, translation, definition, exchange
 
-请为每张表设置合理的字段类型（JSON 字段用 TEXT 存储并在注释中说明结构）、主键策略（使用 UUID v7 字符串，关联表用联合主键）、外键与级联删除规则，以及必要的索引（如 sessions.started_at、turns(session_id, turn_index)、vocabulary.normalized_term 唯一、weak_points.normalized_key 唯一、review_schedules.next_review_at）。
+请为每张表设置合理的字段类型（JSON 结构的字段用 MySQL JSON 类型，并在 COMMENT 中说明结构）、主键策略（雪花 ID 用 BIGINT；关联表和统计表用联合主键）和必要的索引，至少包括：
+- t_user.username 唯一，t_invite_code.code 唯一
+- t_api_credential(scope, user_id, provider_type) 唯一
+- t_usage_record(user_id, create_time)
+- t_practice_session(user_id, started_at)、(status, last_active_at)
+- t_turn(session_id, turn_index) 唯一
+- t_review.session_id 唯一
+- t_weak_point(user_id, normalized_key) 唯一
+- t_vocabulary(user_id, normalized_term) 唯一
+- t_srs_schedule(item_type, item_id) 唯一、(user_id, next_review_at)
+- t_lyric_line(song_id, line_index) 唯一
+每张表和字段都要写 COMMENT。
 
 【交付要求】
-- 同时生成 src/shared/types.ts 中与上述表对应的 TypeScript 类型
-- 内置 2 个日常生活场景、1 个雅思模拟考场景、1 个商务场景的示例 JSON，以及首次启动时导入它们的 seed 逻辑
-- 场景中心页面能从数据库读取并展示这 4 个场景（打通 Vue 页面 → api → preload → ipc → service → repository 一条完整链路）
-- 为 Result 包装器、迁移脚本、一个 Repository 和场景中心页面编写 Vitest 测试
-- pnpm lint、pnpm test、pnpm build 均能通过，pnpm dev 能启动出带侧边栏导航的主窗口
-- 在 README 中用一张表说明各目录与 Spring Boot / Vue 项目中对应概念的关系
-- 本次只搭骨架，不实现语音链路和复盘逻辑
+- 另写 V2__seed.sql：插入默认额度策略，以及 2 个日常生活场景、1 个雅思模拟考场景、1 个商务场景的示例数据
+- 实现以下完整链路，其余模块只建空的 Controller / Service 骨架：
+  1. 初始化管理员：GET /api/setup/status、POST /api/setup/admin
+  2. 登录与刷新令牌：POST /api/auth/login、POST /api/auth/refresh、POST /api/auth/logout
+  3. 场景列表：GET /api/scenarios，前端场景中心页面展示 seed 中的 4 个场景
+- 前端完成登录页、初始化页、带左侧导航的主布局、场景中心页，以及管理员路由守卫
+- Provider 只定义接口，并提供一个 OpenAI 兼容的 LlmProvider 实现（WebClient + SSE 流式），其余用抛出“未实现”的占位实现
+- 为 Result、全局异常处理器、AES 加解密工具、AuthService 编写 JUnit 5 单元测试
+- 提供 docker-compose.yml、backend/Dockerfile、nginx.conf（含 /ws 的 WebSocket 反向代理配置）和 .env.example（DB_PASSWORD、JWT_SECRET、SPEAKLOOP_MASTER_KEY）
+- README 说明本地开发启动步骤（MySQL、后端、前端）和 Docker 部署步骤，并提醒：局域网或公网访问必须配置 HTTPS，否则浏览器无法使用麦克风
+- mvn test 通过，pnpm build 通过，docker compose up 后能登录并看到场景中心
+- 本次只搭骨架，不实现语音链路、复盘和额度逻辑
 ```

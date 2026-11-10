@@ -3,3 +3,13 @@ node_modules/
 out/
 dist/
 release/
+coverage/
+*.log
+.vite/
+*.tsbuildinfo
+
+# Java / IDE / env
+target/
+.idea/
+*.iml
+.env
