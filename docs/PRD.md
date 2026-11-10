@@ -831,7 +831,7 @@ interface DailyStat {
 
 本产品是本地桌面应用，“API”分为三层：
 
-1. **应用内部接口**：界面层调用本地服务层（Electron 方案中为 IPC，原生方案中为 Swift Service 协议）。下文按“`域.动作`”命名，统一请求/响应格式。
+1. **应用内部接口**：Vue 界面层通过 Electron IPC 调用主进程服务层。下文按“`域.动作`”命名，统一请求/响应格式。
 2. **事件推送**：服务层向界面推送实时字幕、语音状态等。
 3. **外部 AI 服务适配层**：对接用户配置的 LLM、ASR、TTS、发音评测和实时语音服务。
 
@@ -1082,10 +1082,11 @@ interface RealtimeVoiceProvider {
 | R4 | 外部服务延迟和费用不可控 | 体验差、用户成本 | 系统 ASR/TTS 兜底；显示延迟和复盘消耗估算；推荐性价比配置 |
 | R5 | 发音评测服务选型未定 | 雅思发音分、歌曲评分无法上线 | v0.5 前完成选型；未配置时显示“未评估”，不估造分数 |
 | R6 | 用户配置门槛高 | 首次对话完成率低 | 引导向导 + 推荐配置（一个 LLM Key 起步）+ 每步连通性检测 |
+| R7 | 开发者需新学 TypeScript 与 Electron | 前期进度变慢 | 主进程按 Spring 式分层（ipc / service / repository）组织；先搭骨架再逐个功能迭代；优先迁移 SpeakHub 已验证的模块 |
 
 ### 12.2 待决问题
 
-- [ ] 技术栈：复用 SpeakHub 的 Electron + TypeScript（复用度高），还是用 Swift / SwiftUI 原生开发（体验和包体更好）？见附录。
+- [x] 技术栈：已定为 Electron + Vue 3 + TypeScript（2026-11-10），理由见附录 13.2。
 - [ ] 是否需要提供官方托管的 AI 服务（免配置，需要账号和付费），还是坚持用户自带 Key？
 - [ ] 发音评测服务选型和费用。
 - [ ] 雅思题库由谁来编写和维护？
@@ -1094,7 +1095,27 @@ interface RealtimeVoiceProvider {
 
 ---
 
-## 13. 附录：与 SpeakHub 的复用关系
+## 13. 附录：技术选型与 SpeakHub 复用
+
+### 13.1 技术栈
+
+| 层 | 选型 |
+| --- | --- |
+| 桌面框架 | Electron + electron-vite |
+| 界面 | Vue 3（组合式 API）+ Vue Router + Pinia + TypeScript |
+| 主进程 | Node.js 22 LTS + TypeScript，按 ipc / service / repository / provider 分层 |
+| 数据库 | SQLite（better-sqlite3）+ 版本化迁移脚本 |
+| 校验 | zod |
+| 测试 | Vitest + @vue/test-utils |
+| 打包 | electron-builder，dmg + zip，arm64 与 x64，签名与公证 |
+
+### 13.2 选型理由
+
+- **复用 SpeakHub 主进程**：流式对话、分句朗读、打断、复盘重试、本地语音检测等难点都在 SpeakHub 的 TypeScript 主进程中，Electron 方案可直接迁移。
+- **界面用 Vue**：开发者熟悉 Java + Vue；界面需要按四大场景重新设计，改用 Vue 只损失少量 SpeakHub 的 React 界面代码。
+- **未选方案**：JavaFX（悬浮字幕窗、流式音频和 Mac 公证支持弱）；Spring Boot 本地后端 + Vue（需内置 JRE、两个运行时，单机应用过重）；Swift 原生（体验最好，但需从零学习新语言且无法复用 SpeakHub 代码）。
+
+### 13.3 与 SpeakHub 的复用关系
 
 | SpeakHub 能力 | 在 SpeakLoop 中的处理 | 说明 |
 | --- | --- | --- |
